@@ -10,22 +10,49 @@ from UM.OutputDevice.OutputDevice import OutputDevice #An interface to implement
 from UM.OutputDevice.OutputDeviceError import WriteRequestFailedError #For when something goes wrong.
 from UM.OutputDevice.OutputDevicePlugin import OutputDevicePlugin #The class we need to extend.
 
+from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
+
+
 class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an OutputDevicePlugin for the plug-in system.
     ##  Called upon launch.
     #
     #   You can use this to make a connection to the device or service, and
     #   register the output device to be displayed to the user.
     def start(self):
-        self.getOutputDeviceManager().addOutputDevice(ProductionManager()) #Since this class is also an output device, we can just register ourselves.
-        #You could also add more than one output devices here.
-        #For instance, you could listen to incoming connections and add an output device when a new device is discovered on the LAN.
+        self.zeroconf = Zeroconf()
+        self.iunoAvailable = False
+        print("\nBrowsing services, press Ctrl-C to exit...\n")
+        self.browser = ServiceBrowser(self.zeroconf, "_http._tcp.local.", handlers=[self.on_service_state_change])
 
     ##  Called upon closing.
     #
     #   You can use this to break the connection with the device or service, and
     #   you should unregister the output device to be displayed to the user.
     def stop(self):
-        self.getOutputDeviceManager().removeOutputDevice("IunoProductionManager") #Remove all devices that were added. In this case it's only one.
+        self.zeroconf.close()
+        if self.iunoAvailable:
+            self.getOutputDeviceManager().removeOutputDevice("IunoProductionManager")
+
+    ## Called on mdns state change
+    #
+    def on_service_state_change(self, zeroconf, service_type, name, state_change):
+        Logger.log ("d", "Service %s of type %s state changed: %s" % (name, service_type, state_change))
+
+        if name == "IUNO Production Manager._http._tcp.local.":
+            if state_change is ServiceStateChange.Added:
+                if not self.iunoAvailable:
+                    self.getOutputDeviceManager().addOutputDevice(ProductionManager()) #Since this class is also an output device, we can just register ourselves.
+                Logger.log ("d", "Hello IUNO!")
+                self.iunoAvailable = True
+
+            elif state_change is ServiceStateChange.Removed:
+                if self.iunoAvailable:
+                    self.getOutputDeviceManager().removeOutputDevice("IunoProductionManager") #Remove all devices that were added. In this case it's only one.
+                Logger.log ("d", "Goodbye IUNO!")
+                self.iunoAvailable = False
+
+            else:
+                pass
 
 class ProductionManager(OutputDevice): #We need an actual device to do the writing.
     def __init__(self):
