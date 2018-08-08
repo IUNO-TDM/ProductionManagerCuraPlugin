@@ -1,0 +1,8 @@
+{
+    "name": "IUNO Production Manager Output Device",
+    "author": "Hans-Peter Bock <Hans-Peter.Bock@trumpf.com>",
+    "version": "1.0",
+    "api": 4,
+    "description": "Output device for the IUNO production manager.",
+    "catalog": "uranium"
+}
