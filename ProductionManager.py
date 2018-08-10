@@ -27,7 +27,6 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
         self.zeroconf = Zeroconf()
         self.iunoAvailable = False
         self.browser = ServiceBrowser(self.zeroconf, "_http._tcp.local.", handlers=[self.on_service_state_change])
-        self.getOutputDeviceManager().addOutputDevice(ProductionManager()) #Since this class is also an output device, we can just register ourselves.
 
     ##  Called upon closing.
     #
@@ -97,8 +96,6 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         file_types = file_handler.getSupportedFileTypesWrite()
         if not file_types:
             Logger.log("e", "No supported file types for writing.")
-        else:
-            Logger.log ("i", file_types)
 
         file_type = {}
         for ft in file_types:
@@ -122,19 +119,16 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         job.start()
 
     def _onProgress(self, job, progress):
-        Logger.log("d", "Saving file... {progress}%".format(progress = progress))
+        Logger.log("d", "Creating file... {progress}%".format(progress = progress))
 
     def _onFinished(self, job):
-#        job.getStream().close() #Don't forget to close the stream after it's finished.
-        Logger.log("d", "Done saving file!")
+        Logger.log("d", "Done creating file!")
 
 class CreateUfpAndPostJob(Job):
     def __init__(self, writer, data, mode):
         super().__init__()
-        self._stream = BytesIO()
         self._writer = writer
         self._data = data
-        self._file_name = ""
         self._mode = mode
         self._message = None
         self.progress.connect(self._onProgress)
@@ -152,17 +146,25 @@ class CreateUfpAndPostJob(Job):
     def run(self):
         Job.yieldThread()
         begin_time = time.time()
-        self.setResult(self._writer.write(self._stream, self._data))
-        if not self.getResult():
-            self.setError(self._writer.getInformation())
-
-        url='http://192.168.178.22:3042/api/localobjects'
-
-        data = {'title':(None, "Foo Bar"), 'file':('foobar.ufp', self._stream)}
-        resp = requests.post(url, files=data)
-        if 201 != resp.status_code:
-            self.setResult(False)
-            self.setError(resp.text)
-        Logger.log("d", "http response code %d", resp.status_code)
+        buffer = BytesIO()
+        ret = self._writer.write(buffer, self._data)
         end_time = time.time()
-        Logger.log("d", "Writing file took %s seconds", end_time - begin_time)
+        Logger.log("d", "Creating UFP archive took %s seconds", end_time - begin_time)
+
+        if not ret:
+            self.setError(self._writer.getInformation())
+        else:
+            url='http://192.168.178.22:3042/api/localobjects'
+
+            data = {'title':(None, "Foo Bar"), 'file':('foobar.ufp', buffer.getvalue())}
+            begin_time = time.time()
+            resp = requests.post(url, files=data)
+            end_time = time.time()
+            Logger.log("d", "http response code %d", resp.status_code)
+            Logger.log("d", "Uploading file took %s seconds", end_time - begin_time)
+            if 201 == resp.status_code:
+                self.setResult(True)
+            else:
+                self.setResult(False)
+                self.setError(resp.text)
+        buffer.close()
