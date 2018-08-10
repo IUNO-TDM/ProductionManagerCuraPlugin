@@ -2,9 +2,13 @@
 # This example is released under the terms of the AGPLv3 or higher.
 
 import os.path #To get a file name to write to.
+import requests
+import time
+
+from io import BytesIO
 
 from UM.Application import Application #To find the scene to get the current g-code to write.
-from UM.FileHandler.WriteFileJob import WriteFileJob #To serialise nodes to text.
+from UM.Job import Job
 from UM.Logger import Logger
 from UM.OutputDevice.OutputDevice import OutputDevice #An interface to implement.
 from UM.OutputDevice.OutputDeviceError import WriteRequestFailedError #For when something goes wrong.
@@ -12,6 +16,7 @@ from UM.OutputDevice.OutputDevicePlugin import OutputDevicePlugin #The class we 
 
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
+UFPMIMETYPE = "application/x-ufp"
 
 class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an OutputDevicePlugin for the plug-in system.
     ##  Called upon launch.
@@ -21,8 +26,8 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
     def start(self):
         self.zeroconf = Zeroconf()
         self.iunoAvailable = False
-        print("\nBrowsing services, press Ctrl-C to exit...\n")
         self.browser = ServiceBrowser(self.zeroconf, "_http._tcp.local.", handlers=[self.on_service_state_change])
+        self.getOutputDeviceManager().addOutputDevice(ProductionManager()) #Since this class is also an output device, we can just register ourselves.
 
     ##  Called upon closing.
     #
@@ -97,23 +102,19 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
 
         file_type = {}
         for ft in file_types:
-            if ("application/x-ufp" == ft["mime_type"]):
+            if (UFPMIMETYPE == ft["mime_type"]):
                 file_type = ft
                 break
 
-        Logger.log ("i", file_type)
-        file_writer = file_handler.getWriterByMimeType(file_type["mime_type"]) #This is the object that will serialize our file for us.
-        if not file_writer:
+        assert UFPMIMETYPE == file_type["mime_type"], "File Writer for application/x-ufp not found!"
+
+        ufp_writer = file_handler.getWriterByMimeType(file_type["mime_type"]) #This is the object that will serialize our file for us.
+        if not ufp_writer:
             raise WriteRequestFailedError("Can't find any file writer for the file type {file_type}.".format(file_type = file_type))
 
-        file_writer._createSnapshot()
+        ufp_writer._createSnapshot()
 
-        #For this example, we will write to a file in a fixed location.
-        output_file_name = os.path.expanduser("~/output." + file_type["extension"])
-
-        file_stream = open(output_file_name, "wb")
-
-        job = WriteFileJob(file_writer, file_stream, nodes, 2) #We'll create a WriteFileJob, which gets run asynchronously in the background.
+        job = CreateUfpAndPostJob(ufp_writer, nodes, 2) #We'll create a WriteFileJob, which gets run asynchronously in the background.
 
         job.progress.connect(self._onProgress) #You can listen to the event for when it's done and when it's progressing.
         job.finished.connect(self._onFinished) #This way we can properly close the file stream.
@@ -124,5 +125,44 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         Logger.log("d", "Saving file... {progress}%".format(progress = progress))
 
     def _onFinished(self, job):
-        job.getStream().close() #Don't forget to close the stream after it's finished.
+#        job.getStream().close() #Don't forget to close the stream after it's finished.
         Logger.log("d", "Done saving file!")
+
+class CreateUfpAndPostJob(Job):
+    def __init__(self, writer, data, mode):
+        super().__init__()
+        self._stream = BytesIO()
+        self._writer = writer
+        self._data = data
+        self._file_name = ""
+        self._mode = mode
+        self._message = None
+        self.progress.connect(self._onProgress)
+        self.finished.connect(self._onFinished)
+
+    def _onFinished(self, job):
+        if self == job and self._message is not None:
+            self._message.hide()
+            self._message = None
+
+    def _onProgress(self, job, amount):
+        if self == job and self._message:
+            self._message.setProgress(amount)
+
+    def run(self):
+        Job.yieldThread()
+        begin_time = time.time()
+        self.setResult(self._writer.write(self._stream, self._data))
+        if not self.getResult():
+            self.setError(self._writer.getInformation())
+
+        url='http://192.168.178.22:3042/api/localobjects'
+
+        data = {'title':(None, "Foo Bar"), 'file':('foobar.ufp', self._stream)}
+        resp = requests.post(url, files=data)
+        if 201 != resp.status_code:
+            self.setResult(False)
+            self.setError(resp.text)
+        Logger.log("d", "http response code %d", resp.status_code)
+        end_time = time.time()
+        Logger.log("d", "Writing file took %s seconds", end_time - begin_time)
