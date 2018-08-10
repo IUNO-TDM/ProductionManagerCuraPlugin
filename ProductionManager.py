@@ -4,6 +4,7 @@
 import os.path #To get a file name to write to.
 import requests
 import time
+import socket
 
 from io import BytesIO
 
@@ -25,8 +26,7 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
     #   register the output device to be displayed to the user.
     def start(self):
         self.zeroconf = Zeroconf()
-        self.iunoAvailable = False
-        self.browser = ServiceBrowser(self.zeroconf, "_http._tcp.local.", handlers=[self.on_service_state_change])
+        self.browser = ServiceBrowser(self.zeroconf, "_iuno-pm._tcp.local.", handlers=[self.on_service_state_change])
 
     ##  Called upon closing.
     #
@@ -34,37 +34,33 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
     #   you should unregister the output device to be displayed to the user.
     def stop(self):
         self.zeroconf.close()
-        if self.iunoAvailable:
-            self.getOutputDeviceManager().removeOutputDevice("IunoProductionManager")
 
     ## Called on mdns state change
     #
     def on_service_state_change(self, zeroconf, service_type, name, state_change):
         Logger.log ("d", "Service %s of type %s state changed: %s" % (name, service_type, state_change))
 
-        if name == "IUNO Production Manager._http._tcp.local.":
-            if state_change is ServiceStateChange.Added:
-                if not self.iunoAvailable:
-                    self.getOutputDeviceManager().addOutputDevice(ProductionManager()) #Since this class is also an output device, we can just register ourselves.
-                Logger.log ("d", "Hello IUNO!")
-                self.iunoAvailable = True
+        if state_change is ServiceStateChange.Added:
+            info = zeroconf.get_service_info(service_type, name)
+            server = info.server
+            url = "http://%s:%d/api/localobjects" % (socket.inet_ntoa(info.address), info.port)
+            self.getOutputDeviceManager().addOutputDevice(ProductionManager(url, name=server, id=name)) #Since this class is also an output device, we can just register ourselves.
+            Logger.log ("d", "Hello %s!" % (name))
 
-            elif state_change is ServiceStateChange.Removed:
-                if self.iunoAvailable:
-                    self.getOutputDeviceManager().removeOutputDevice("IunoProductionManager") #Remove all devices that were added. In this case it's only one.
-                Logger.log ("d", "Goodbye IUNO!")
-                self.iunoAvailable = False
-
-            else:
-                pass
+        elif state_change is ServiceStateChange.Removed:
+            self.getOutputDeviceManager().removeOutputDevice(name) #Remove all devices that were added. In this case it's only one.
+            Logger.log ("d", "Goodbye %s!" % (name))
 
 class ProductionManager(OutputDevice): #We need an actual device to do the writing.
-    def __init__(self):
-        super().__init__("IunoProductionManager") #Give an ID which is used to refer to the output device.
+    def __init__(self, url, name="IUNO", id="foo"):
+        self._url = url
+        self._name = name
+        self._id = id
+        super().__init__(self._id) #Give an ID which is used to refer to the output device.
 
         #Optionally set some metadata.
-        self.setName("IUNO Production Manager Output Device") #Human-readable name (you may want to internationalise this). Gets put in messages and such.
-        self.setShortDescription("send to IUNO") #This is put on the save button.
+        self.setName("Device: %s" % (self._id)) #Human-readable name (you may want to internationalise this). Gets put in messages and such.
+        self.setShortDescription(self._name) #This is put on the save button.
         self.setDescription("IUNO Production Manager")
         self.setIconName("save")
 
@@ -111,7 +107,7 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
 
         ufp_writer._createSnapshot()
 
-        job = CreateUfpAndPostJob(ufp_writer, nodes, 2) #We'll create a WriteFileJob, which gets run asynchronously in the background.
+        job = CreateUfpAndPostJob(ufp_writer, nodes, 2, self._url) #We'll create a WriteFileJob, which gets run asynchronously in the background.
 
         job.progress.connect(self._onProgress) #You can listen to the event for when it's done and when it's progressing.
         job.finished.connect(self._onFinished) #This way we can properly close the file stream.
@@ -125,8 +121,9 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         Logger.log("d", "Done creating file!")
 
 class CreateUfpAndPostJob(Job):
-    def __init__(self, writer, data, mode):
+    def __init__(self, writer, data, mode, url):
         super().__init__()
+        self._url = url
         self._writer = writer
         self._data = data
         self._mode = mode
@@ -154,11 +151,9 @@ class CreateUfpAndPostJob(Job):
         if not ret:
             self.setError(self._writer.getInformation())
         else:
-            url='http://192.168.178.22:3042/api/localobjects'
-
             data = {'title':(None, "Foo Bar"), 'file':('foobar.ufp', buffer.getvalue())}
             begin_time = time.time()
-            resp = requests.post(url, files=data)
+            resp = requests.post(self._url, files=data)
             end_time = time.time()
             Logger.log("d", "http response code %d", resp.status_code)
             Logger.log("d", "Uploading file took %s seconds", end_time - begin_time)
