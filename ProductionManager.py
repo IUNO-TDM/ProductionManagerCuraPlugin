@@ -42,9 +42,10 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
 
         if state_change is ServiceStateChange.Added:
             info = zeroconf.get_service_info(service_type, name)
-            server = info.server
+            serverName = info.name.split(".")[0]
+            Logger.log ("d", "ProductionManager: ServerName after split %s" %(serverName))
             url = "http://%s:%d/api/localobjects" % (socket.inet_ntoa(info.address), info.port)
-            self.getOutputDeviceManager().addOutputDevice(ProductionManager(url, name=server, id=name)) #Since this class is also an output device, we can just register ourselves.
+            self.getOutputDeviceManager().addOutputDevice(ProductionManager(url, serverName=serverName, id=name)) #Since this class is also an output device, we can just register ourselves.
             Logger.log ("d", "Hello %s!" % (name))
 
         elif state_change is ServiceStateChange.Removed:
@@ -52,16 +53,16 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
             Logger.log ("d", "Goodbye %s!" % (name))
 
 class ProductionManager(OutputDevice): #We need an actual device to do the writing.
-    def __init__(self, url, name="IUNO", id="foo"):
+    def __init__(self, url, serverName="IUNO", id="foo"):
         self._url = url
-        self._name = name
+        self._servername = serverName
         self._id = id
         super().__init__(self._id) #Give an ID which is used to refer to the output device.
 
         #Optionally set some metadata.
-        self.setName("Device: %s" % (self._id)) #Human-readable name (you may want to internationalise this). Gets put in messages and such.
-        self.setShortDescription(self._name) #This is put on the save button.
-        self.setDescription("IUNO Production Manager")
+        self.setName("IUNO %s" % (self._id)) #Human-readable name (you may want to internationalise this). Gets put in messages and such.
+        self.setShortDescription("senden an %s (IUNO PM)" % (self._servername)) #This is put on the save button.
+        self.setDescription("IUNO Production Manager %s" % (self._servername))
         self.setIconName("save")
 
     ##  Called when the user clicks on the button to save to this device.
