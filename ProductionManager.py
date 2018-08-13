@@ -42,7 +42,7 @@ class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an Outpu
 
         if state_change is ServiceStateChange.Added:
             info = zeroconf.get_service_info(service_type, name)
-            serverName = info.name.split(".")[0]
+            serverName = info.server.split(".")[0]
             Logger.log ("d", "ProductionManager: ServerName after split %s" %(serverName))
             url = "http://%s:%d/api/localobjects" % (socket.inet_ntoa(info.address), info.port)
             self.getOutputDeviceManager().addOutputDevice(ProductionManager(url, serverName=serverName, id=name)) #Since this class is also an output device, we can just register ourselves.
