@@ -108,7 +108,7 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
 
         ufp_writer._createSnapshot()
 
-        job = CreateUfpAndPostJob(ufp_writer, nodes, 2, self._url) #We'll create a WriteFileJob, which gets run asynchronously in the background.
+        job = CreateUfpAndPostJob(ufp_writer, nodes, 2, self._url, file_name) #We'll create a WriteFileJob, which gets run asynchronously in the background.
 
         job.progress.connect(self._onProgress) #You can listen to the event for when it's done and when it's progressing.
         job.finished.connect(self._onFinished) #This way we can properly close the file stream.
@@ -122,13 +122,14 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         Logger.log("d", "Done creating file!")
 
 class CreateUfpAndPostJob(Job):
-    def __init__(self, writer, data, mode, url):
+    def __init__(self, writer, data, mode, url, file_name="NotProvided"):
         super().__init__()
         self._url = url
         self._writer = writer
         self._data = data
         self._mode = mode
         self._message = None
+        self._file_name = file_name
         self.progress.connect(self._onProgress)
         self.finished.connect(self._onFinished)
 
@@ -152,7 +153,7 @@ class CreateUfpAndPostJob(Job):
         if not ret:
             self.setError(self._writer.getInformation())
         else:
-            data = {'title':(None, "Foo Bar"), 'file':('foobar.ufp', buffer.getvalue())}
+            data = {'title':(None, self._file_name), 'file':(self._file_name+".ufp", buffer.getvalue())}
             begin_time = time.time()
             resp = requests.post(self._url, files=data)
             end_time = time.time()
