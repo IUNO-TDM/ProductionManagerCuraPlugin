@@ -69,6 +69,7 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         self.setShortDescription("senden an %s (IUNO PM)" % (self._servername)) #This is put on the save button.
         self.setDescription("IUNO Production Manager %s" % (self._servername))
         self.setIconName("save")
+        self.setPriority(4)
 
     ##  Called when the user clicks on the button to save to this device.
     #
