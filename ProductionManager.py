@@ -14,10 +14,15 @@ from UM.Logger import Logger
 from UM.OutputDevice.OutputDevice import OutputDevice #An interface to implement.
 from UM.OutputDevice.OutputDeviceError import WriteRequestFailedError #For when something goes wrong.
 from UM.OutputDevice.OutputDevicePlugin import OutputDevicePlugin #The class we need to extend.
+from UM.Message import Message
+
+from UM.i18n import i18nCatalog
 
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
 UFPMIMETYPE = "application/x-ufp"
+
+catalog = i18nCatalog("uranium")
 
 class ProductionManagerDevicePlugin(OutputDevicePlugin): #We need to be an OutputDevicePlugin for the plug-in system.
     ##  Called upon launch.
@@ -102,6 +107,8 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
 
         assert UFPMIMETYPE == file_type["mime_type"], "File Writer for application/x-ufp not found!"
 
+        self.writeStarted.emit(self)
+
         ufp_writer = file_handler.getWriterByMimeType(file_type["mime_type"]) #This is the object that will serialize our file for us.
         if not ufp_writer:
             raise WriteRequestFailedError("Can't find any file writer for the file type {file_type}.".format(file_type = file_type))
@@ -113,13 +120,31 @@ class ProductionManager(OutputDevice): #We need an actual device to do the writi
         job.progress.connect(self._onProgress) #You can listen to the event for when it's done and when it's progressing.
         job.finished.connect(self._onFinished) #This way we can properly close the file stream.
 
+        message = Message(catalog.i18nc("@info:progress Don't translate the XML tags <filename>!", "Saving to <filename>{0}</filename>").format(file_name),
+                            0, False, -1 , catalog.i18nc("@info:title", "Saving"))
+        message.show()
+
+        job.setMessage(message)
+        self._writing = True
         job.start()
 
     def _onProgress(self, job, progress):
+        self.writeProgress.emit(self, progress)
         Logger.log("d", "Creating file... {progress}%".format(progress = progress))
 
     def _onFinished(self, job):
-        Logger.log("d", "Done creating file!")
+        self._writing = False
+        self.writeFinished.emit(self)
+        if job.getResult():
+            self.writeSuccess.emit(self)
+            message = Message("Sucessfully posted scene to IUNO Production Manager!")
+            message.show()
+        else:
+            message = Message(catalog.i18nc("@info:status Don't translate the XML tags <filename> or <message>!", "Could not save to <filename>{0}</filename>: <message>{1}</message>").format(job.getFileName(), str(job.getError())), lifetime = 0, title = catalog.i18nc("@info:title", "Warning"))
+            message.show()
+            self.writeError.emit(self)
+
+        Logger.log("d", "Done Create and  Post UFP!")
 
 class CreateUfpAndPostJob(Job):
     def __init__(self, writer, data, mode, url, file_name="NotProvided"):
@@ -142,6 +167,19 @@ class CreateUfpAndPostJob(Job):
         if self == job and self._message:
             self._message.setProgress(amount)
 
+    def setFileName(self, name):
+        self._file_name = name
+
+    def getFileName(self):
+        return self._file_name
+
+    ##  Set the message associated with this job
+    def setMessage(self, message):
+        self._message = message
+
+    def getMessage(self):
+        return self._message
+
     def run(self):
         Job.yieldThread()
         begin_time = time.time()
@@ -151,6 +189,7 @@ class CreateUfpAndPostJob(Job):
         Logger.log("d", "Creating UFP archive took %s seconds", end_time - begin_time)
 
         if not ret:
+            self.setResult(False)
             self.setError(self._writer.getInformation())
         else:
             data = {'title':(None, self._file_name), 'file':(self._file_name+".ufp", buffer.getvalue())}
